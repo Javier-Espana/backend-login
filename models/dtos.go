@@ -21,6 +21,7 @@ type RegisterRequest struct {
 type LoginSuccessData struct {
 	UserID   int64  `json:"userId"`
 	Username string `json:"username"`
+	Token    string `json:"token"` // Nuevo campo
 }
 
 // RegisterSuccessData defines the structure for the data returned on successful registration.
@@ -68,4 +69,11 @@ func NewErrorResponse(errorMessage string) APIResponse {
 			Message: errorMessage,
 		},
 	}
+}
+
+// UserProfileResponse define la estructura para la respuesta del perfil
+type UserProfileResponse struct {
+    ID       int64  `json:"id"`
+    Username string `json:"username"`
+    // Puedes añadir más campos aquí según necesites
 }

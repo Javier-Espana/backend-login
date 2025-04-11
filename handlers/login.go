@@ -1,94 +1,85 @@
 package handlers
-//login.go
+
 import (
 	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
 
-	// Import your models package (adjust path 'myapp' if your module name is different)
 	"myapp/models"
+	"myapp/utils" // Paquete donde estarían generateJWT y storeToken
 
 	"golang.org/x/crypto/bcrypt"
 	_ "github.com/mattn/go-sqlite3"
-
 )
 
-// postLoginHandler handles user login attempts.
 func PostLoginHandler(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// 1. Decode Request Body into LoginRequest DTO from models package
-		var req models.LoginRequest // Use the DTO from the models package
+		// 1. Decode Request Body
+		var req models.LoginRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			log.Printf("Error decoding login request: %v", err)
-			// Use the factory from the models package
-			response := models.NewErrorResponse("Invalid request body")
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(response)
+			respondWithError(w, http.StatusBadRequest, "Invalid request body")
 			return
 		}
 
 		// 2. Basic Validation
 		if req.Username == "" || req.Password == "" {
-			// Use the factory from the models package
-			response := models.NewErrorResponse("Username and password are required")
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
-			json.NewEncoder(w).Encode(response)
+			respondWithError(w, http.StatusBadRequest, "Username and password are required")
 			return
 		}
 
-		// 3. Query Database for User ID and Hashed Password
+		// 3. Query Database for User
 		var storedHash string
-		var userID int64 // Use int64 for database IDs
+		var userID int64
 		err := db.QueryRowContext(r.Context(),
 			"SELECT id, password_hash FROM users WHERE username = ?",
 			req.Username,
 		).Scan(&userID, &storedHash)
 
 		if err != nil {
-			// Use the factory from the models package
-			response := models.NewErrorResponse("Invalid username or password") // Generic message
-			statusCode := http.StatusUnauthorized
-
-			if err != sql.ErrNoRows {
+			if err == sql.ErrNoRows {
+				respondWithError(w, http.StatusUnauthorized, "Invalid username or password")
+			} else {
 				log.Printf("Error querying user '%s': %v", req.Username, err)
-				// Use the factory from the models package
-				response = models.NewErrorResponse("Internal server error")
-				statusCode = http.StatusInternalServerError
+				respondWithError(w, http.StatusInternalServerError, "Internal server error")
 			}
-
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(statusCode)
-			json.NewEncoder(w).Encode(response)
 			return
 		}
 
-		// 4. Compare Provided Password with Stored Hash
+		// 4. Compare Password Hash
 		err = bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(req.Password))
 		if err != nil {
-			// Use the factory from the models package
-			response := models.NewErrorResponse("Invalid username or password")
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			json.NewEncoder(w).Encode(response)
+			respondWithError(w, http.StatusUnauthorized, "Invalid username or password")
 			return
 		}
 
-		// 5. Login Successful - Prepare and Send Success Response
-		log.Printf("Login successful for user ID: %d (%s)", userID, req.Username)
-
-		// Create the specific data payload using the DTO from the models package
-		loginData := models.LoginSuccessData{ // Use the DTO from the models package
-			UserID:   userID,
-			Username: req.Username,
+		// 5. Generate JWT
+		tokenString, expirationTime, err := utils.GenerateJWT(userID)
+		if err != nil {
+			log.Printf("Error generating JWT for user %d: %v", userID, err)
+			respondWithError(w, http.StatusInternalServerError, "Error generating session token")
+			return
 		}
 
-		// Wrap the data in the standard APIResponse using the factory from the models package
-		response := models.NewSuccessResponse(loginData)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(response)
+		// 6. Store Token in Database
+		err = utils.StoreToken(db, userID, tokenString, expirationTime)
+		if err != nil {
+			log.Printf("Error storing token for user %d: %v", userID, err)
+			respondWithError(w, http.StatusInternalServerError, "Error storing session token")
+			return
+		}
+
+		log.Printf("Login successful for user ID: %d (%s)", userID, req.Username)
+
+		// 7. Return Success Response with Token
+		loginData := models.LoginSuccessData{
+			UserID:   userID,
+			Username: req.Username,
+			Token:    tokenString, // Añadir campo Token en tu modelo LoginSuccessData
+		}
+
+		respondWithJSON(w, http.StatusOK, models.NewSuccessResponse(loginData))
+		
 	}
 }
